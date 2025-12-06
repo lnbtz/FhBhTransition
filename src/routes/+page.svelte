@@ -55,6 +55,15 @@
 	const angleRange = { min: 8, max: 18 };
 	const speedClamp = { min: 5.2, max: 8.4 };
 	const speedJitter = { min: 0.92, max: 1.08 };
+	const landingAngleOffsets: Record<LandingKey, number> = {
+		wideLeft: -10,
+		leftCorner: -7,
+		midLeft: -4,
+		middle: 0,
+		midRight: 4,
+		rightCorner: 7,
+		wideRight: 10
+	};
 
 	type Picker<T> = () => T;
 	const makeAlternatingPicker = <T,>(items: T[]): Picker<T> => {
@@ -66,35 +75,26 @@
 		};
 	};
 
-	const alternatingTargets = makeAlternatingPicker([
-		landingSpots.midLeft,
-		landingSpots.midRight
+	const alternatingTargets = makeAlternatingPicker<{ key: LandingKey; spot: THREE.Vector3 }>([
+		{ key: 'midLeft', spot: landingSpots.midLeft },
+		{ key: 'midRight', spot: landingSpots.midRight }
 	]);
-	const originPicker = makeAlternatingPicker([
-		robotOrigins.left,
-		robotOrigins.middle,
-		robotOrigins.right
-	]);
+	const originOrder: OriginKey[] = ['left', 'middle', 'right'];
+	let originIndex = 0;
 
 	type OriginKey = keyof typeof robotOrigins;
 
-	function landingOptionsForOrigin(originKey: OriginKey): THREE.Vector3[] {
-		// Rule-of-thumb: don't send extreme wide balls from the same-side origin to keep angles believable.
-		return Object.entries(landingSpots)
-			.filter(([key]) => {
-				if (originKey === 'right' && key === 'wideRight') return false;
-				if (originKey === 'left' && key === 'wideLeft') return false;
-				return true;
-			})
-			.map(([, spot]) => spot);
-	}
-
-	function pickLanding(originKey: OriginKey): THREE.Vector3 {
+	function pickLanding(originKey: OriginKey): { key: LandingKey; spot: THREE.Vector3 } {
 		if (settings.targetMode === 'alternateFH') {
 			return alternatingTargets();
 		}
-		const options = landingOptionsForOrigin(originKey);
-		return options[Math.floor(Math.random() * options.length)];
+		const options = (Object.entries(landingSpots) as [LandingKey, THREE.Vector3][]).filter(([key]) => {
+			if (originKey === 'right' && key === 'wideRight') return false;
+			if (originKey === 'left' && key === 'wideLeft') return false;
+			return true;
+		});
+		const [key, spot] = options[Math.floor(Math.random() * options.length)];
+		return { key, spot };
 	}
 
 	function computeTrajectory(
@@ -143,6 +143,8 @@
 		return { velocity, flightTime, landingPoint };
 	}
 
+	type PaddleInstance = { group: THREE.Group; face: THREE.Mesh; sponge: THREE.Mesh };
+
 	let scene: THREE.Scene;
 	let camera: THREE.PerspectiveCamera;
 	let renderer: THREE.WebGLRenderer;
@@ -153,6 +155,10 @@
 	let ballCount = 0;
 	let isRunning = false;
 	let nextSpawnMs = 0;
+	let paddles: Partial<Record<OriginKey, PaddleInstance>> = {};
+	let upcomingShot: { originKey: OriginKey; landing: { key: LandingKey; spot: THREE.Vector3 } } | null =
+		null;
+	const basePaddleScale = 1.5;
 
 	function setupScene() {
 		scene = new THREE.Scene();
@@ -191,6 +197,8 @@
 		const fill = new THREE.PointLight(0x8cf3ff, 0.4);
 		fill.position.set(0, 2.4, 1.2);
 		scene.add(fill);
+
+		createPaddles();
 	}
 
 	function resizeRenderer() {
@@ -203,6 +211,77 @@
 
 	const randomBetween = (min: number, max: number) => Math.random() * (max - min) + min;
 
+	function colorsForAngle(offset: number) {
+		const base = new THREE.Color(0xc1121f);
+		const hsl = { h: 0, s: 0, l: 0 };
+		base.getHSL(hsl);
+		const norm = THREE.MathUtils.clamp(offset / 10, -1, 1);
+		const light = THREE.MathUtils.clamp(hsl.l + norm * 0.06, 0.2, 0.8);
+		const face = new THREE.Color().setHSL(hsl.h, hsl.s, light);
+		const sponge = new THREE.Color().setHSL(hsl.h, hsl.s * 0.95, Math.max(light - 0.04, 0.15));
+		return { face, sponge };
+	}
+
+	function createPaddle(): PaddleInstance {
+		const group = new THREE.Group();
+
+		const faceMaterial = new THREE.MeshPhongMaterial({ color: 0xc1121f, shininess: 80 });
+		const spongeMaterial = new THREE.MeshPhongMaterial({ color: 0x91131f, shininess: 40 });
+		const handleMaterial = new THREE.MeshPhongMaterial({ color: 0x7a5230, shininess: 30 });
+
+		const face = new THREE.Mesh(new THREE.CylinderGeometry(0.095, 0.095, 0.014, 32), faceMaterial);
+		face.rotation.x = Math.PI / 2;
+		face.castShadow = true;
+		face.receiveShadow = true;
+
+		const sponge = new THREE.Mesh(new THREE.CylinderGeometry(0.092, 0.092, 0.006, 32), spongeMaterial);
+		sponge.rotation.x = Math.PI / 2;
+		sponge.position.y = 0.008;
+
+		const handle = new THREE.Mesh(new THREE.CylinderGeometry(0.018, 0.02, 0.18, 20), handleMaterial);
+		handle.position.y = -0.12;
+		handle.castShadow = true;
+		handle.receiveShadow = true;
+
+		group.add(face);
+		group.add(sponge);
+		group.add(handle);
+		group.position.set(0, table.height + 0.32, table.length / 2 + 0.25);
+		group.rotation.set(-0.3, 0, 0);
+		group.visible = false;
+		group.scale.setScalar(basePaddleScale);
+
+		return { group, face, sponge };
+	}
+
+	function createPaddles() {
+		paddles = {};
+		(['left', 'middle', 'right'] as OriginKey[]).forEach((key) => {
+			const paddle = createPaddle();
+			paddles[key] = paddle;
+			scene.add(paddle.group);
+		});
+	}
+
+	function disposePaddles() {
+		Object.values(paddles).forEach((paddle) => {
+			if (!paddle) return;
+			scene.remove(paddle.group);
+			paddle.group.traverse((child) => {
+				if ((child as THREE.Mesh).isMesh) {
+					const mesh = child as THREE.Mesh;
+					(mesh.geometry as THREE.BufferGeometry).dispose();
+					if (Array.isArray(mesh.material)) {
+						mesh.material.forEach((mat) => (mat as THREE.Material).dispose());
+					} else {
+						(mesh.material as THREE.Material).dispose();
+					}
+				}
+			});
+		});
+		paddles = {};
+	}
+
 	function normalizedIntervalRange() {
 		const lower = Math.min(settings.intervalRange.min, settings.intervalRange.max);
 		const upper = Math.max(settings.intervalRange.min, settings.intervalRange.max);
@@ -214,6 +293,46 @@
 	function scheduleNextSpawn(nowMs: number) {
 		const { min, max } = normalizedIntervalRange();
 		nextSpawnMs = nowMs + randomBetween(min, max);
+	}
+
+	function planNextShot(): { originKey: OriginKey; landing: { key: LandingKey; spot: THREE.Vector3 } } {
+		const originKey = nextOriginKey();
+		const landing = pickLanding(originKey);
+		return { originKey, landing };
+	}
+
+	function previewNextShot() {
+		if (!upcomingShot) {
+			upcomingShot = planNextShot();
+		}
+		orientPaddle(upcomingShot.originKey, upcomingShot.landing);
+	}
+
+	function orientPaddle(originKey: OriginKey, landing: { key: LandingKey; spot: THREE.Vector3 }) {
+		Object.values(paddles).forEach((p) => p && (p.group.visible = false));
+		const paddle = paddles[originKey];
+		if (!paddle) return;
+
+		const origin = robotOrigins[originKey];
+		paddle.group.visible = true;
+		paddle.group.position.copy(origin).add(new THREE.Vector3(0, -0.02, 0.05));
+
+		const dir = new THREE.Vector3(landing.spot.x - origin.x, 0, landing.spot.z - origin.z);
+		const baseYaw = Math.atan2(dir.x, dir.z);
+		const yawOffsetDeg = landingAngleOffsets[landing.key] ?? 0;
+		const yaw = baseYaw + THREE.MathUtils.degToRad(yawOffsetDeg);
+		paddle.group.rotation.set(-0.35, yaw, 0);
+
+		const { face, sponge } = colorsForAngle(yawOffsetDeg);
+		(paddle.face.material as THREE.MeshPhongMaterial).color.copy(face);
+		(paddle.sponge.material as THREE.MeshPhongMaterial).color.copy(sponge);
+
+		const magnitude = Math.min(Math.abs(yawOffsetDeg) / 10, 1);
+		const stretch = 1 + magnitude * 0.25;
+		const squash = 1 - magnitude * 0.15;
+		const xScale = yawOffsetDeg >= 0 ? stretch : squash;
+		const zScale = yawOffsetDeg >= 0 ? squash : stretch;
+		paddle.group.scale.set(basePaddleScale * xScale, basePaddleScale, basePaddleScale * zScale);
 	}
 
 	function solveSpeedForTarget(
@@ -256,18 +375,25 @@
 		return { angleDeg, speed };
 	}
 
-	function spawnBall(nowSeconds: number) {
-		const originKey: OriginKey =
-			settings.startPosition === 'alternate'
-				? (['left', 'middle', 'right'][Math.floor(Math.random() * 3)] as OriginKey)
-				: settings.startPosition;
-		const origin = settings.startPosition === 'alternate' ? originPicker() : robotOrigins[originKey];
+	function nextOriginKey(): OriginKey {
+		if (settings.startPosition === 'alternate') {
+			const key = originOrder[originIndex % originOrder.length];
+			originIndex += 1;
+			return key;
+		}
+		return settings.startPosition;
+	}
 
-		const landing = pickLanding(originKey);
-		const { angleDeg, speed } = pickLaunch(origin, landing);
+	function spawnBall(nowSeconds: number) {
+		const shot = upcomingShot ?? planNextShot();
+		upcomingShot = null;
+
+		const origin = robotOrigins[shot.originKey];
+		orientPaddle(shot.originKey, shot.landing);
+		const { angleDeg, speed } = pickLaunch(origin, shot.landing.spot);
 		const { velocity, flightTime } = computeTrajectory(
 			origin.clone(),
-			landing,
+			shot.landing.spot,
 			-9,
 			angleDeg,
 			speed,
@@ -302,7 +428,10 @@
 		}
 
 		balls = balls.filter((ball) => {
-			const alive = stepBall(ball, delta, table.height, camera.position.z);
+			const { alive, passedCamera } = stepBall(ball, delta, table.height, camera.position.z);
+			if (passedCamera) {
+				previewNextShot();
+			}
 			if (!alive) {
 				scene.remove(ball.mesh);
 				(ball.mesh.geometry as THREE.BufferGeometry).dispose();
@@ -325,6 +454,8 @@
 		nextSpawnMs = 0; // force an immediate first ball
 		lastFlightDuration = 0;
 		ballCount = 0;
+		originIndex = 0;
+		upcomingShot = null;
 		isRunning = true;
 		animate();
 	}
@@ -340,9 +471,11 @@
 			(ball.mesh.material as THREE.Material).dispose();
 		});
 		balls = [];
+		disposePaddles();
 		container?.firstChild && container.removeChild(container.firstChild);
 		isRunning = false;
 		nextSpawnMs = 0;
+		upcomingShot = null;
 	}
 
 	onMount(() => {

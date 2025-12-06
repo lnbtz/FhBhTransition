@@ -7,6 +7,8 @@ export type BallState = {
 	gravity: number;
 	restitution: number;
 	bounced: boolean;
+	origin: THREE.Vector3;
+	returning: boolean;
 };
 
 export function createBallMesh(radius: number): THREE.Mesh {
@@ -33,7 +35,9 @@ export function createBallFromVelocity(params: {
 		radius,
 		gravity,
 		restitution,
-		bounced: false
+		bounced: false,
+		origin: start.clone(),
+		returning: false
 	};
 }
 
@@ -70,15 +74,22 @@ export function createBall(params: {
 		radius,
 		gravity,
 		restitution,
-		bounced: false
+		bounced: false,
+		origin: start.clone(),
+		returning: false
 	};
 }
 
 /**
  * Advance the ball by dt seconds, apply gravity, and bounce on the table surface.
- * Returns whether the ball should keep existing.
+ * Returns whether the ball should keep existing and whether it passed the camera plane.
  */
-export function stepBall(ball: BallState, dt: number, tableHeight: number, cameraZ: number): boolean {
+export function stepBall(
+	ball: BallState,
+	dt: number,
+	tableHeight: number,
+	cameraZ: number
+): { alive: boolean; passedCamera: boolean } {
 	// Apply gravity to vertical velocity.
 	ball.velocity.y += ball.gravity * dt;
 
@@ -93,10 +104,12 @@ export function stepBall(ball: BallState, dt: number, tableHeight: number, camer
 		ball.bounced = true;
 	}
 
+	const prevZ = ball.mesh.position.z;
 	ball.mesh.position.copy(nextPos);
 
-	// Culling: once the ball passes the camera (toward negative z) or drifts far away, drop it.
-	const behindCamera = ball.mesh.position.z < cameraZ - 0.3;
-	const tooFar = ball.mesh.position.length() > 30;
-	return !(behindCamera || tooFar);
+	const planeZ = cameraZ - 0.3;
+	const passedCamera = prevZ >= planeZ && ball.mesh.position.z < planeZ;
+	const behindCamera = ball.mesh.position.z < planeZ;
+	const tooFar = ball.mesh.position.length() > 40;
+	return { alive: !(behindCamera || tooFar), passedCamera };
 }
