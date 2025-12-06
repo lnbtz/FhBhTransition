@@ -16,9 +16,7 @@
 	};
 
 	type Settings = {
-		intervalMs: number;
-		launchAngleDeg: number; // elevation of the shot in degrees
-		ballSpeed: number; // initial speed magnitude in m/s
+		intervalRange: { min: number; max: number };
 		targetMode: 'alternateFH' | 'randomAngles';
 		startPosition: 'left' | 'middle' | 'right' | 'alternate';
 	};
@@ -49,12 +47,14 @@
 	};
 
 	let settings: Settings = {
-		intervalMs: 1200,
-		launchAngleDeg: 12,
-		ballSpeed: 6,
+		intervalRange: { min: 900, max: 1400 },
 		targetMode: 'randomAngles',
 		startPosition: 'left'
 	};
+
+	const angleRange = { min: 8, max: 18 };
+	const speedClamp = { min: 5.2, max: 8.4 };
+	const speedJitter = { min: 0.92, max: 1.08 };
 
 	type Picker<T> = () => T;
 	const makeAlternatingPicker = <T,>(items: T[]): Picker<T> => {
@@ -147,10 +147,12 @@
 	let camera: THREE.PerspectiveCamera;
 	let renderer: THREE.WebGLRenderer;
 	let rafId = 0;
-	let lastSpawnMs = 0;
-	const clock = new THREE.Clock();
+	let clock: THREE.Clock;
 	let balls: BallState[] = [];
 	let lastFlightDuration = 0;
+	let ballCount = 0;
+	let isRunning = false;
+	let nextSpawnMs = 0;
 
 	function setupScene() {
 		scene = new THREE.Scene();
@@ -199,6 +201,61 @@
 		camera.updateProjectionMatrix();
 	}
 
+	const randomBetween = (min: number, max: number) => Math.random() * (max - min) + min;
+
+	function normalizedIntervalRange() {
+		const lower = Math.min(settings.intervalRange.min, settings.intervalRange.max);
+		const upper = Math.max(settings.intervalRange.min, settings.intervalRange.max);
+		const min = Math.max(200, lower);
+		const max = Math.max(min, upper);
+		return { min, max };
+	}
+
+	function scheduleNextSpawn(nowMs: number) {
+		const { min, max } = normalizedIntervalRange();
+		nextSpawnMs = nowMs + randomBetween(min, max);
+	}
+
+	function solveSpeedForTarget(
+		start: THREE.Vector3,
+		aim: THREE.Vector3,
+		angleDeg: number,
+		radius: number,
+		gravity: number
+	): number | null {
+		const angle = THREE.MathUtils.degToRad(angleDeg);
+		const horizontalDir = new THREE.Vector3(aim.x - start.x, 0, aim.z - start.z);
+		const horizontalDistance = horizontalDir.length();
+		if (horizontalDistance < 0.05) return null;
+
+		const surfaceY = table.height + radius;
+		const deltaY = surfaceY - start.y;
+		const cos = Math.cos(angle);
+		if (cos < 1e-3) return null;
+
+		const denom = 2 * cos * cos * (deltaY - horizontalDistance * Math.tan(angle));
+		if (denom === 0) return null;
+
+		const speedSquared = (gravity * horizontalDistance * horizontalDistance) / denom;
+		if (speedSquared <= 0 || !Number.isFinite(speedSquared)) return null;
+		return Math.sqrt(speedSquared);
+	}
+
+	function pickLaunch(origin: THREE.Vector3, landing: THREE.Vector3) {
+		const angleDeg = randomBetween(angleRange.min, angleRange.max);
+		const baseSpeed = solveSpeedForTarget(origin, landing, angleDeg, 0.02, -9);
+		const speed =
+			baseSpeed === null
+				? randomBetween(speedClamp.min, speedClamp.max)
+				: THREE.MathUtils.clamp(
+						baseSpeed * randomBetween(speedJitter.min, speedJitter.max),
+						speedClamp.min,
+						speedClamp.max
+				  );
+
+		return { angleDeg, speed };
+	}
+
 	function spawnBall(nowSeconds: number) {
 		const originKey: OriginKey =
 			settings.startPosition === 'alternate'
@@ -207,19 +264,20 @@
 		const origin = settings.startPosition === 'alternate' ? originPicker() : robotOrigins[originKey];
 
 		const landing = pickLanding(originKey);
-		const { velocity, flightTime, landingPoint } = computeTrajectory(
+		const { angleDeg, speed } = pickLaunch(origin, landing);
+		const { velocity, flightTime } = computeTrajectory(
 			origin.clone(),
 			landing,
 			-9,
-			settings.launchAngleDeg,
-			settings.ballSpeed,
+			angleDeg,
+			speed,
 			0.02
 		);
 		lastFlightDuration = flightTime;
 
 		// Land on/near the table, bounce, then continue toward the player/camera.
 		const radius = 0.02;
-		const restitution = THREE.MathUtils.clamp(0.35 + settings.launchAngleDeg / 90, 0.25, 0.65);
+		const restitution = THREE.MathUtils.clamp(0.35 + angleDeg / 90, 0.25, 0.65);
 		const ball = createBallFromVelocity({
 			start: origin.clone(),
 			velocity,
@@ -230,6 +288,7 @@
 
 		scene.add(ball.mesh);
 		balls.push(ball);
+		ballCount += 1;
 	}
 
 	function animate() {
@@ -237,9 +296,9 @@
 		const nowSeconds = clock.elapsedTime;
 		const nowMs = nowSeconds * 1000;
 
-		if (nowMs - lastSpawnMs >= settings.intervalMs) {
+		if (nowMs >= nextSpawnMs) {
 			spawnBall(nowSeconds);
-			lastSpawnMs = nowMs;
+			scheduleNextSpawn(nowMs);
 		}
 
 		balls = balls.filter((ball) => {
@@ -257,16 +316,23 @@
 	}
 
 	function start() {
+		if (isRunning) return;
+		stop();
+		clock = new THREE.Clock();
 		setupScene();
 		window.addEventListener('resize', resizeRenderer);
 		clock.start();
-		lastSpawnMs = -settings.intervalMs; // force an immediate first ball
+		nextSpawnMs = 0; // force an immediate first ball
+		lastFlightDuration = 0;
+		ballCount = 0;
+		isRunning = true;
 		animate();
 	}
 
 	function stop() {
 		cancelAnimationFrame(rafId);
 		window.removeEventListener('resize', resizeRenderer);
+		clock?.stop();
 		renderer?.dispose();
 		balls.forEach((ball) => {
 			scene.remove(ball.mesh);
@@ -275,30 +341,35 @@
 		});
 		balls = [];
 		container?.firstChild && container.removeChild(container.firstChild);
+		isRunning = false;
+		nextSpawnMs = 0;
 	}
 
 	onMount(() => {
-		start();
 		return () => stop();
 	});
 </script>
 
 <div class="page">
 	<div class="controls">
-		<h1>Table Tennis Robot</h1>
+		<div class="header">
+			<div>
+				<h1>Table Tennis Robot</h1>
+				<p class="note">
+					Ball delay randomizes between the interval range; speed and angle still auto-adjust to keep
+					shots on the table. Current flight duration (derived): {lastFlightDuration.toFixed(2)}s
+				</p>
+			</div>
+			<div class="actions">
+				<button class="start" on:click={start} disabled={isRunning}>Start</button>
+				<button class="stop" on:click={stop} disabled={!isRunning}>Stop</button>
+				<div class="counter">
+					<span>Balls launched</span>
+					<strong>{ballCount}</strong>
+				</div>
+			</div>
+		</div>
 		<div class="row">
-			<label>
-				<span>Interval (ms)</span>
-				<input type="number" min="200" step="50" bind:value={settings.intervalMs} />
-			</label>
-			<label>
-				<span>Launch angle (deg)</span>
-				<input type="number" min="2" max="30" step="0.5" bind:value={settings.launchAngleDeg} />
-			</label>
-			<label>
-				<span>Ball speed (m/s)</span>
-				<input type="number" min="1" step="0.1" bind:value={settings.ballSpeed} />
-			</label>
 			<label>
 				<span>Start position</span>
 				<select bind:value={settings.startPosition}>
@@ -309,20 +380,34 @@
 				</select>
 			</label>
 			<label>
-				<span>Targets</span>
+				<span>Drill</span>
 				<select bind:value={settings.targetMode}>
-					<option value="randomAngles">Random angles (7 pts)</option>
-					<option value="alternateFH">Alternate FH / BH</option>
+					<option value="randomAngles">Random all table</option>
+					<option value="alternateFH">1 - 1</option>
 				</select>
 			</label>
+			<label class="interval">
+				<span>Interval range (ms)</span>
+				<div class="interval-inputs">
+					<input
+						type="number"
+						min="200"
+						step="50"
+						bind:value={settings.intervalRange.min}
+						disabled={isRunning}
+					/>
+					<span class="dash">–</span>
+					<input
+						type="number"
+						min="200"
+						step="50"
+						bind:value={settings.intervalRange.max}
+						disabled={isRunning}
+					/>
+				</div>
+				<small class="hint">Delay between balls randomizes within this range.</small>
+			</label>
 		</div>
-		<p class="note">
-			Origin is table center; x: left/right, z: depth (player is -z), y: up. Launch angle + speed set
-			the arc: higher angle/low speed drops near the net; low angle/high speed skims lower and reaches
-			deeper. Balls land on the table, bounce with energy loss, and pass the camera before being culled.
-			<br />
-			Current flight duration (derived): {lastFlightDuration.toFixed(2)}s
-		</p>
 	</div>
 	<div class="viewport" bind:this={container}></div>
 </div>
@@ -351,16 +436,81 @@
 		backdrop-filter: blur(6px);
 	}
 
+	.header {
+		display: flex;
+		justify-content: space-between;
+		align-items: center;
+		gap: 12px;
+		flex-wrap: wrap;
+	}
+
 	h1 {
-		margin: 0 0 12px;
+		margin: 0 0 6px;
 		font-size: 18px;
+	}
+
+	.actions {
+		display: flex;
+		align-items: center;
+		gap: 10px;
+		flex-wrap: wrap;
+	}
+
+	button {
+		border: none;
+		border-radius: 10px;
+		padding: 10px 14px;
+		color: #0b1221;
+		font-weight: 600;
+		cursor: pointer;
+		transition: transform 120ms ease, box-shadow 120ms ease, opacity 120ms ease;
+	}
+
+	button:disabled {
+		opacity: 0.5;
+		cursor: not-allowed;
+	}
+
+	button.start {
+		background: linear-gradient(135deg, #22c55e, #16a34a);
+		box-shadow: 0 10px 30px rgba(22, 163, 74, 0.35);
+	}
+
+	button.stop {
+		background: linear-gradient(135deg, #f97316, #ea580c);
+		box-shadow: 0 10px 30px rgba(234, 88, 12, 0.35);
+		color: #0b1221;
+	}
+
+	button:not(:disabled):hover {
+		transform: translateY(-1px);
+	}
+
+	.counter {
+		display: grid;
+		padding: 8px 12px;
+		background: rgba(15, 23, 42, 0.75);
+		border: 1px solid rgba(226, 232, 240, 0.12);
+		border-radius: 10px;
+		min-width: 120px;
+	}
+
+	.counter span {
+		font-size: 12px;
+		color: #cbd5e1;
+	}
+
+	.counter strong {
+		font-size: 20px;
+		color: #e2e8f0;
 	}
 
 	.row {
 		display: grid;
-		grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+		grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
 		gap: 12px;
 		align-items: center;
+		margin-top: 10px;
 	}
 
 	label {
@@ -368,14 +518,6 @@
 		flex-direction: column;
 		gap: 6px;
 		font-size: 14px;
-	}
-
-	label input[type='number'] {
-		background: #0f172a;
-		border: 1px solid rgba(226, 232, 240, 0.14);
-		color: #e2e8f0;
-		padding: 8px 10px;
-		border-radius: 8px;
 	}
 
 	select {
@@ -386,10 +528,36 @@
 		border-radius: 8px;
 	}
 
+	input[type='number'] {
+		background: #0f172a;
+		border: 1px solid rgba(226, 232, 240, 0.14);
+		color: #e2e8f0;
+		padding: 8px 10px;
+		border-radius: 8px;
+	}
+
 	.note {
-		margin: 12px 0 0;
+		margin: 0;
 		color: #cbd5e1;
 		font-size: 13px;
+		max-width: 520px;
+	}
+
+	.interval-inputs {
+		display: grid;
+		grid-template-columns: 1fr auto 1fr;
+		align-items: center;
+		gap: 8px;
+	}
+
+	.interval-inputs .dash {
+		color: #94a3b8;
+		text-align: center;
+	}
+
+	.hint {
+		color: #94a3b8;
+		font-size: 12px;
 	}
 
 	.viewport {
