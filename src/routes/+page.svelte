@@ -17,8 +17,9 @@
 
 	type Settings = {
 		intervalRange: { min: number; max: number };
-		targetMode: 'alternateFH' | 'randomAngles';
+		targetMode: 'alternateFH' | 'randomAngles' | 'fhOnly' | 'bhOnly';
 		startPosition: 'left' | 'middle' | 'right' | 'alternate';
+		speedMode: SpeedMode;
 	};
 
 	const robotOrigins = {
@@ -45,14 +46,25 @@
 		rightCorner: new THREE.Vector3(table.width / 2 - 0.05, table.height + 0.02, -table.length / 2 + 0.18),
 		wideRight: new THREE.Vector3(table.width / 2 + 0.18, table.height + 0.02, -table.length / 2 + 0.35)
 	};
+	const landingSideTargets: Record<'left' | 'right', LandingKey[]> = {
+		left: ['wideLeft', 'leftCorner', 'midLeft'],
+		right: ['midRight', 'rightCorner', 'wideRight']
+	};
 
 	let settings: Settings = {
 		intervalRange: { min: 900, max: 1400 },
 		targetMode: 'randomAngles',
-		startPosition: 'left'
+		startPosition: 'left',
+		speedMode: 'fast'
 	};
 
-	const angleRange = { min: 8, max: 18 };
+	type SpeedMode = 'fast' | 'medium' | 'slow' | 'verySlow';
+	const speedProfiles: Record<SpeedMode, { angleRange: { min: number; max: number } }> = {
+		fast: { angleRange: { min: 8, max: 18 } },
+		medium: { angleRange: { min: 14, max: 22 } },
+		slow: { angleRange: { min: 18, max: 26 } },
+		verySlow: { angleRange: { min: 22, max: 30 } }
+	};
 	const speedClamp = { min: 5.2, max: 8.4 };
 	const speedJitter = { min: 0.92, max: 1.08 };
 	const landingAngleOffsets: Record<LandingKey, number> = {
@@ -88,13 +100,23 @@
 		if (settings.targetMode === 'alternateFH') {
 			return alternatingTargets();
 		}
-		const options = (Object.entries(landingSpots) as [LandingKey, THREE.Vector3][]).filter(([key]) => {
-			if (originKey === 'right' && key === 'wideRight') return false;
-			if (originKey === 'left' && key === 'wideLeft') return false;
-			return true;
-		});
-		const [key, spot] = options[Math.floor(Math.random() * options.length)];
-		return { key, spot };
+		let allowedKeys: LandingKey[] = Object.keys(landingSpots) as LandingKey[];
+		if (settings.targetMode === 'fhOnly') {
+			allowedKeys = landingSideTargets.right;
+		} else if (settings.targetMode === 'bhOnly') {
+			allowedKeys = landingSideTargets.left;
+		}
+
+		const options = allowedKeys
+			.filter((key) => {
+				if (originKey === 'right' && key === 'wideRight') return false;
+				if (originKey === 'left' && key === 'wideLeft') return false;
+				return true;
+			})
+			.map((key) => ({ key, spot: landingSpots[key] }));
+
+		const pick = options[Math.floor(Math.random() * options.length)];
+		return pick;
 	}
 
 	function computeTrajectory(
@@ -143,7 +165,7 @@
 		return { velocity, flightTime, landingPoint };
 	}
 
-	type PaddleInstance = { group: THREE.Group; face: THREE.Mesh; sponge: THREE.Mesh };
+	type PaddleInstance = { group: THREE.Group; face: THREE.Mesh; sponge: THREE.Mesh; timerFill: THREE.Mesh };
 
 	let scene: THREE.Scene;
 	let camera: THREE.PerspectiveCamera;
@@ -155,10 +177,12 @@
 	let ballCount = 0;
 	let isRunning = false;
 	let nextSpawnMs = 0;
+	let spawnIntervalMs = 0;
 	let paddles: Partial<Record<OriginKey, PaddleInstance>> = {};
 	let upcomingShot: { originKey: OriginKey; landing: { key: LandingKey; spot: THREE.Vector3 } } | null =
 		null;
 	const basePaddleScale = 1.5;
+	const timerBar = { width: 0.18, height: 0.01, depth: 0.008, y: 0.15, z: 0.03 };
 
 	function setupScene() {
 		scene = new THREE.Scene();
@@ -228,6 +252,12 @@
 		const faceMaterial = new THREE.MeshPhongMaterial({ color: 0xc1121f, shininess: 80 });
 		const spongeMaterial = new THREE.MeshPhongMaterial({ color: 0x91131f, shininess: 40 });
 		const handleMaterial = new THREE.MeshPhongMaterial({ color: 0x7a5230, shininess: 30 });
+		const timerBaseMaterial = new THREE.MeshPhongMaterial({ color: 0x0f172a, shininess: 10 });
+		const timerFillMaterial = new THREE.MeshPhongMaterial({
+			color: 0x38bdf8,
+			emissive: 0x1d4ed8,
+			shininess: 80
+		});
 
 		const face = new THREE.Mesh(new THREE.CylinderGeometry(0.095, 0.095, 0.014, 32), faceMaterial);
 		face.rotation.x = Math.PI / 2;
@@ -243,15 +273,33 @@
 		handle.castShadow = true;
 		handle.receiveShadow = true;
 
+		const timerBase = new THREE.Mesh(
+			new THREE.BoxGeometry(timerBar.width, timerBar.height, timerBar.depth),
+			timerBaseMaterial
+		);
+		timerBase.position.set(0, timerBar.y, timerBar.z);
+
+		const timerFillGeometry = new THREE.BoxGeometry(
+			timerBar.width,
+			timerBar.height * 0.7,
+			timerBar.depth * 0.6
+		);
+		timerFillGeometry.translate(timerBar.width / 2, 0, 0);
+		const timerFill = new THREE.Mesh(timerFillGeometry, timerFillMaterial);
+		timerFill.position.set(-timerBar.width / 2, timerBar.y, timerBar.z + 0.002);
+		timerFill.scale.x = 0;
+
 		group.add(face);
 		group.add(sponge);
 		group.add(handle);
+		group.add(timerBase);
+		group.add(timerFill);
 		group.position.set(0, table.height + 0.32, table.length / 2 + 0.25);
 		group.rotation.set(-0.3, 0, 0);
 		group.visible = false;
 		group.scale.setScalar(basePaddleScale);
 
-		return { group, face, sponge };
+		return { group, face, sponge, timerFill };
 	}
 
 	function createPaddles() {
@@ -292,7 +340,8 @@
 
 	function scheduleNextSpawn(nowMs: number) {
 		const { min, max } = normalizedIntervalRange();
-		nextSpawnMs = nowMs + randomBetween(min, max);
+		spawnIntervalMs = randomBetween(min, max);
+		nextSpawnMs = nowMs + spawnIntervalMs;
 	}
 
 	function planNextShot(): { originKey: OriginKey; landing: { key: LandingKey; spot: THREE.Vector3 } } {
@@ -361,6 +410,7 @@
 	}
 
 	function pickLaunch(origin: THREE.Vector3, landing: THREE.Vector3) {
+		const { angleRange } = speedProfiles[settings.speedMode];
 		const angleDeg = randomBetween(angleRange.min, angleRange.max);
 		const baseSpeed = solveSpeedForTarget(origin, landing, angleDeg, 0.02, -9);
 		const speed =
@@ -440,8 +490,26 @@
 			return alive;
 		});
 
+		updateTimerBar(nowMs);
 		renderer.render(scene, camera);
 		rafId = requestAnimationFrame(animate);
+	}
+
+	function updateTimerBar(nowMs: number) {
+		if (spawnIntervalMs <= 0) {
+			Object.values(paddles).forEach((paddle) => {
+				if (!paddle) return;
+				paddle.timerFill.scale.x = 0;
+			});
+			return;
+		}
+
+		const remaining = Math.max(0, nextSpawnMs - nowMs);
+		const progress = THREE.MathUtils.clamp(1 - remaining / spawnIntervalMs, 0, 1);
+		Object.values(paddles).forEach((paddle) => {
+			if (!paddle) return;
+			paddle.timerFill.scale.x = progress;
+		});
 	}
 
 	function start() {
@@ -452,6 +520,7 @@
 		window.addEventListener('resize', resizeRenderer);
 		clock.start();
 		nextSpawnMs = 0; // force an immediate first ball
+		spawnIntervalMs = 0;
 		lastFlightDuration = 0;
 		ballCount = 0;
 		originIndex = 0;
@@ -475,6 +544,7 @@
 		container?.firstChild && container.removeChild(container.firstChild);
 		isRunning = false;
 		nextSpawnMs = 0;
+		spawnIntervalMs = 0;
 		upcomingShot = null;
 	}
 
@@ -517,6 +587,17 @@
 				<select bind:value={settings.targetMode}>
 					<option value="randomAngles">Random all table</option>
 					<option value="alternateFH">1 - 1</option>
+					<option value="fhOnly">FH only (right)</option>
+					<option value="bhOnly">BH only (left)</option>
+				</select>
+			</label>
+			<label>
+				<span>Ball speed</span>
+				<select bind:value={settings.speedMode}>
+					<option value="fast">Fast (current)</option>
+					<option value="medium">Medium</option>
+					<option value="slow">Slow</option>
+					<option value="verySlow">Very slow</option>
 				</select>
 			</label>
 			<label class="interval">
