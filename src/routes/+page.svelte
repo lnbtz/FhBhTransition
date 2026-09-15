@@ -5,11 +5,11 @@
 	import { PracticeScene } from '$lib/three/PracticeScene';
 	import type { Drill, Hand, ShotSpec } from '$lib/training/types';
 	let stage:HTMLDivElement, scene:PracticeScene;
-	let hand:Hand='left', selected='fh-bh', interval=2400, speed=1, variance=1, seed=27, space=2, cueLead=900, marker=false, sound=true;
+	let hand:Hand='left', selected='fh-bh', interval=1200, speed=1, variance=1, seed=27, space=2, cueLead=500, marker=false, sound=true;
 	let running=false, paused=false, countdown=0, count=0, startTime=0, elapsed=0, current:ShotSpec|null=null, next:ShotSpec|null=null, timer:ReturnType<typeof setTimeout>|null=null, phase:'ready'|'work'|'rest'|'done'='ready', work=45, rest=15, rounds=3, round=1;
 	$: drill=drills.find(d=>d.id===selected)??drills[0];
 	$: moveScale=space===1?'compact steps':space===2?'normal steps':'full steps';
-	function save(){localStorage.setItem('rallyroom',JSON.stringify({hand,selected,interval,speed,variance,seed,space,cueLead,marker,sound,work,rest,rounds}))}
+	function save(){localStorage.setItem('rallyroom-v2',JSON.stringify({hand,selected,interval,speed,variance,seed,space,cueLead,marker,sound,work,rest,rounds}))}
 	function choose(d:Drill){selected=d.id;interval=d.defaultInterval;save()}
 	function beep(freq=620,d=.08){if(!sound)return;const C=window.AudioContext;const a=new C(),o=a.createOscillator(),g=a.createGain();o.frequency.value=freq;g.gain.setValueAtTime(.1,a.currentTime);g.gain.exponentialRampToValueAtTime(.001,a.currentTime+d);o.connect(g).connect(a.destination);o.start();o.stop(a.currentTime+d)}
 	async function start(){if(running)return;save();running=true;paused=false;phase='ready';count=0;round=1;startTime=Date.now();for(const n of [3,2,1]){countdown=n;beep(420+n*80);await new Promise(r=>setTimeout(r,700));if(!running)return}countdown=0;phase='work';schedule(true)}
@@ -20,7 +20,7 @@
 	function contact(s:ShotSpec){current=s;beep(980,.04)}
 	function key(e:KeyboardEvent){if(e.code==='Space'){e.preventDefault();toggle()}if(e.key==='Escape'&&document.fullscreenElement)document.exitFullscreen()}
 	function full(){document.fullscreenElement?document.exitFullscreen():document.documentElement.requestFullscreen()}
-	onMount(()=>{try{const p=JSON.parse(localStorage.getItem('rallyroom')||'{}');Object.assign({},{...p});hand=p.hand??hand;selected=p.selected??selected;interval=p.interval??interval;speed=p.speed??speed;variance=p.variance??variance;seed=p.seed??seed;space=p.space??space;cueLead=p.cueLead??cueLead;marker=p.marker??marker;sound=p.sound??sound}catch{};
+	onMount(()=>{try{const p=JSON.parse(localStorage.getItem('rallyroom-v2')||'{}');hand=p.hand??hand;selected=p.selected??selected;interval=p.interval??interval;speed=p.speed??speed;variance=p.variance??variance;seed=p.seed??seed;space=p.space??space;cueLead=p.cueLead??cueLead;marker=p.marker??marker;sound=p.sound??sound}catch{};
 		try{scene=new PracticeScene(stage,contact)}catch{stage.classList.add('fallback')};const ro=new ResizeObserver(()=>scene?.resize());ro.observe(stage);window.addEventListener('keydown',key);return()=>{if(timer)clearTimeout(timer);ro.disconnect();scene?.dispose();window.removeEventListener('keydown',key)}})
 </script>
 
@@ -48,11 +48,11 @@
 		</div>
 		<aside>
 			<h2>Session settings</h2>
-			<label>Feed interval <output>{(interval/1000).toFixed(1)} sec</output><input type="range" min="1600" max="4500" step="100" bind:value={interval}/><small>Independent of ball speed</small></label>
-			<label>Ball speed <output>{speed<.9?'Slow':speed>1.1?'Quick':'Match pace'}</output><input type="range" min=".75" max="1.25" step=".05" bind:value={speed}/></label>
+			<label>Feed interval <output>{(interval/1000).toFixed(1)} sec</output><input type="range" min="800" max="3000" step="50" bind:value={interval}/><small>Default: continuous rally pace</small></label>
+			<label>Ball speed <output>{speed<.9?'Controlled':speed>1.1?'Fast rally':'Continuous rally'}</output><input type="range" min=".75" max="1.25" step=".05" bind:value={speed}/><small>Changes flight time, not feed rhythm</small></label>
 			<label>Pattern variance <output>{variance==0?'Exact':variance==1?'Gentle':'Match-like'}</output><input type="range" min="0" max="2" step="1" bind:value={variance}/><small>Pattern order never changes</small></label>
 			<label>Home space <output>{space==1?'Small':space==2?'Medium':'Large'}</output><input type="range" min="1" max="3" step="1" bind:value={space}/><small>Scales your shadow steps, not the table</small></label>
-			<label>Racket cue lead <output>{cueLead/1000}s</output><input type="range" min="500" max="1500" step="100" bind:value={cueLead}/></label>
+			<label>Racket cue lead <output>{cueLead/1000}s</output><input type="range" min="300" max="1000" step="50" bind:value={cueLead}/></label>
 			<div class="inline"><label>Work <input type="number" min="15" max="180" bind:value={work}/> sec</label><label>Rest <input type="number" min="5" max="60" bind:value={rest}/> sec</label><label>Rounds <input type="number" min="1" max="10" bind:value={rounds}/></label></div>
 			<div class="toggles"><label><input type="checkbox" bind:checked={marker}/> Show landing marker</label><label><input type="checkbox" bind:checked={sound}/> Sound cues</label></div>
 			{#if selected==='controlled'}<label>Reproducible seed <input type="number" bind:value={seed}/></label>{/if}

@@ -17,6 +17,8 @@ export function makeShot(drill: Drill, index: number, hand: Hand, variance: numb
 	const spread=variance*.055;
 	const targetX=Math.max(-.72,Math.min(.72,xByZone[step.zone]*mirror+(rand()-.5)*spread));
 	const targetZ=isShort(step.zone) ? -.18+(rand()-.5)*variance*.08 : -1.02+(rand()-.5)*variance*.13;
-	const base=step.feed==='backspin'?1.05:step.feed==='block'?.72:.86;
-	return {...step,feed:step.feed??'topspin',targetX,targetZ,duration:base/speed+(rand()-.5)*variance*.04,seed};
+	// First-bounce flight time in seconds. Match pace is intentionally a low, direct rally ball:
+	// blocks arrive quickest, while backspin has a little more hang time for an opening stroke.
+	const base=step.feed==='backspin'?.55:step.feed==='block'?.42:.46;
+	return {...step,feed:step.feed??'topspin',targetX,targetZ,duration:base/speed+(rand()-.5)*variance*.018,seed};
 }
