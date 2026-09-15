@@ -10,7 +10,7 @@ export function sideLabel(zone: Zone, hand: Hand) {
 export function seeded(seed: number) { let n=seed|0; return () => ((n=Math.imul(48271,n)%2147483647)&2147483647)/2147483647; }
 export function makeShot(drill: Drill, index: number, hand: Hand, variance: number, seed: number, speed: number): ShotSpec {
 	const rand=seeded(seed + index*7919); let step: Step=drill.pattern[index%drill.pattern.length];
-	if (drill.id==='controlled') { const pool=drill.pattern; step=pool[Math.floor(rand()*pool.length)]; }
+	if (drill.random) { const pool=drill.pattern; step=pool[Math.floor(rand()*pool.length)]; }
 	if (step.decision) step={...step,response:step.decision[Math.floor(rand()*step.decision.length)]};
 	// Patterns use conventional right-handed geometry, then mirror as one unit for a left-handed player.
 	const mirror=hand==='left' ? -1 : 1;
