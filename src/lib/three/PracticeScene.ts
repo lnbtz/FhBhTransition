@@ -25,7 +25,10 @@ export class PracticeScene {
 	private last = performance.now();
 	private active: ActiveBall[] = [];
 	private opponent = new THREE.Group();
+	private hittingArm = new THREE.Group();
 	private racket = new THREE.Group();
+	private armPose = new THREE.Euler();
+	private racketPose = new THREE.Euler();
 	private swing = 0;
 	private disposed = false;
 
@@ -102,38 +105,176 @@ export class PracticeScene {
 	}
 
 	private buildOpponent() {
-		const shirt = this.material('#233e50', 0.75);
-		const skin = this.material('#bb8264', 0.8);
-		const body = new THREE.Mesh(new THREE.CapsuleGeometry(0.22, 0.52, 8, 16), shirt);
-		body.position.y = 1.28;
-		const head = new THREE.Mesh(new THREE.SphereGeometry(0.135, 24, 16), skin);
-		head.position.set(0, 1.79, -0.015);
-		const shoulders = new THREE.Mesh(new THREE.CapsuleGeometry(0.075, 0.42, 6, 12), shirt);
-		shoulders.rotation.z = Math.PI / 2;
-		shoulders.position.y = 1.52;
-		this.opponent.add(body, head, shoulders);
+		const shirt = this.material('#24566d', 0.68);
+		const shirtDark = this.material('#163442', 0.76);
+		const accent = new THREE.MeshStandardMaterial({ color: '#dfff46', roughness: 0.52, emissive: '#7f990f', emissiveIntensity: 0.12 });
+		const skin = this.material('#bd8064', 0.82);
+		const hair = this.material('#172126', 0.9);
+		const shorts = this.material('#101c25', 0.86);
+		const socks = this.material('#d6d9d2', 0.9);
+		const shoes = this.material('#d9ff4d', 0.7);
+		const eyeMaterial = new THREE.MeshBasicMaterial({ color: '#101719' });
 
-		// The hitting arm and racket sit camera-side and clear of the torso, so the contact cue is readable.
-		const arm = new THREE.Mesh(new THREE.CapsuleGeometry(0.055, 0.38, 6, 12), skin);
-		arm.rotation.z = -0.96;
-		arm.position.set(0.34, 1.36, -0.1);
-		this.opponent.add(arm);
-		const rubber = new THREE.MeshStandardMaterial({ color: '#ed4938', roughness: 0.72, side: THREE.DoubleSide });
-		const blade = new THREE.Mesh(new THREE.CylinderGeometry(0.105, 0.105, 0.018, 32), rubber);
-		blade.rotation.x = Math.PI / 2;
-		const rim = new THREE.Mesh(new THREE.TorusGeometry(0.106, 0.009, 8, 32), this.material('#e5c08a'));
-		const handle = new THREE.Mesh(new THREE.CapsuleGeometry(0.022, 0.13, 6, 10), this.material('#b77539'));
-		handle.position.y = -0.15;
-		this.racket.add(blade, rim, handle);
-		this.racket.position.set(0.51, 1.28, -0.22);
-		this.opponent.add(this.racket);
+		const limbBetween = (a: THREE.Vector3, b: THREE.Vector3, radius: number, material: THREE.Material) => {
+			const direction = b.clone().sub(a);
+			const mesh = new THREE.Mesh(
+				new THREE.CapsuleGeometry(radius, Math.max(0.01, direction.length() - radius * 2), 8, 16),
+				material
+			);
+			mesh.position.copy(a).add(b).multiplyScalar(0.5);
+			mesh.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), direction.normalize());
+			return mesh;
+		};
+
+		// A tapered, slightly forward-leaning torso reads much more like an athlete than a vertical capsule.
+		const torso = new THREE.Mesh(new THREE.CylinderGeometry(0.245, 0.175, 0.52, 24), shirt);
+		torso.position.set(0, 1.32, 0.015);
+		torso.rotation.x = -0.08;
+		const waist = new THREE.Mesh(new THREE.CylinderGeometry(0.178, 0.19, 0.12, 20), shirtDark);
+		waist.position.set(0, 1.05, 0.035);
+		const shortsBody = new THREE.Mesh(new THREE.CylinderGeometry(0.19, 0.205, 0.22, 20), shorts);
+		shortsBody.position.set(0, 0.93, 0.04);
+		this.opponent.add(torso, waist, shortsBody);
+
+		const chestStripe = new THREE.Mesh(new THREE.BoxGeometry(0.15, 0.025, 0.008), accent);
+		chestStripe.position.set(-0.025, 1.38, -0.2);
+		chestStripe.rotation.z = -0.24;
+		const collar = new THREE.Mesh(new THREE.TorusGeometry(0.057, 0.009, 7, 24), shirtDark);
+		collar.position.set(0, 1.565, -0.105);
+		collar.scale.y = 0.55;
+		this.opponent.add(chestStripe, collar);
+
+		// Head, neck and a few restrained facial details keep the low-poly style without looking faceless.
+		const neck = new THREE.Mesh(new THREE.CylinderGeometry(0.068, 0.075, 0.13, 16), skin);
+		neck.position.set(0, 1.62, 0.005);
+		const head = new THREE.Mesh(new THREE.SphereGeometry(0.142, 28, 20), skin);
+		head.position.set(0, 1.76, -0.015);
+		head.scale.set(0.94, 1.08, 0.96);
+		const hairCap = new THREE.Mesh(new THREE.SphereGeometry(0.146, 28, 14, 0, Math.PI * 2, 0, Math.PI * 0.5), hair);
+		hairCap.position.set(0, 1.775, -0.01);
+		const nose = new THREE.Mesh(new THREE.SphereGeometry(0.023, 12, 8), skin);
+		nose.position.set(0, 1.745, -0.15);
+		const leftEar = new THREE.Mesh(new THREE.SphereGeometry(0.025, 12, 8), skin);
+		leftEar.position.set(-0.137, 1.76, -0.014);
+		const rightEar = leftEar.clone();
+		rightEar.position.x = 0.137;
+		const leftEye = new THREE.Mesh(new THREE.SphereGeometry(0.011, 10, 8), eyeMaterial);
+		leftEye.position.set(-0.046, 1.787, -0.144);
+		const rightEye = leftEye.clone();
+		rightEye.position.x = 0.046;
+		const mouth = new THREE.Mesh(new THREE.BoxGeometry(0.047, 0.006, 0.006), eyeMaterial);
+		mouth.position.set(0, 1.69, -0.145);
+		this.opponent.add(neck, head, hairCap, nose, leftEar, rightEar, leftEye, rightEye, mouth);
+
+		// Crouched legs and offset knees give the player a believable ready stance behind the table.
+		const leftHip = new THREE.Vector3(-0.105, 0.93, 0.04);
+		const rightHip = new THREE.Vector3(0.105, 0.93, 0.04);
+		const leftKnee = new THREE.Vector3(-0.245, 0.59, -0.015);
+		const rightKnee = new THREE.Vector3(0.245, 0.59, -0.015);
+		const leftAnkle = new THREE.Vector3(-0.29, 0.2, 0.065);
+		const rightAnkle = new THREE.Vector3(0.29, 0.2, 0.065);
+		this.opponent.add(
+			limbBetween(leftHip, leftKnee, 0.075, skin),
+			limbBetween(rightHip, rightKnee, 0.075, skin),
+			limbBetween(leftKnee, leftAnkle, 0.059, skin),
+			limbBetween(rightKnee, rightAnkle, 0.059, skin)
+		);
+		for (const x of [-0.29, 0.29]) {
+			const sock = new THREE.Mesh(new THREE.CylinderGeometry(0.055, 0.058, 0.13, 14), socks);
+			sock.position.set(x, 0.14, 0.065);
+			const shoe = new THREE.Mesh(new THREE.BoxGeometry(0.14, 0.075, 0.25), shoes);
+			shoe.position.set(x, 0.055, -0.015);
+			shoe.rotation.y = x < 0 ? 0.08 : -0.08;
+			this.opponent.add(sock, shoe);
+		}
+
+		// The free arm is bent in front of the body for balance instead of hanging as a single stick.
+		const freeShoulder = new THREE.Vector3(-0.205, 1.48, -0.01);
+		const freeSleeve = new THREE.Vector3(-0.285, 1.39, -0.07);
+		const freeElbow = new THREE.Vector3(-0.35, 1.26, -0.145);
+		const freeHand = new THREE.Vector3(-0.19, 1.17, -0.245);
+		this.opponent.add(
+			limbBetween(freeShoulder, freeSleeve, 0.073, shirt),
+			limbBetween(freeSleeve, freeElbow, 0.049, skin),
+			limbBetween(freeElbow, freeHand, 0.043, skin)
+		);
+		const balanceHand = new THREE.Mesh(new THREE.SphereGeometry(0.051, 16, 12), skin);
+		balanceHand.position.copy(freeHand);
+		balanceHand.scale.set(1.15, 0.8, 0.65);
+		this.opponent.add(balanceHand);
+
+		// The hitting arm is a connected shoulder/elbow/wrist chain. The whole chain rotates through contact.
+		this.hittingArm.position.set(0.205, 1.48, -0.01);
+		const armOrigin = new THREE.Vector3(0, 0, 0);
+		const sleeveEnd = new THREE.Vector3(0.085, -0.09, -0.04);
+		const elbow = new THREE.Vector3(0.195, -0.22, -0.105);
+		const hand = new THREE.Vector3(0.355, -0.32, -0.22);
+		this.hittingArm.add(
+			limbBetween(armOrigin, sleeveEnd, 0.073, shirt),
+			limbBetween(sleeveEnd, elbow, 0.049, skin),
+			limbBetween(elbow, hand, 0.043, skin)
+		);
+		const hittingHand = new THREE.Mesh(new THREE.SphereGeometry(0.052, 16, 12), skin);
+		hittingHand.position.copy(hand);
+		hittingHand.scale.set(1.1, 0.82, 0.7);
+		this.hittingArm.add(hittingHand);
+
+		// Layered blade: visible wood edge, two rubbers, handle core and grip inlays.
+		const wood = this.material('#d5a05f', 0.67);
+		const lightWood = this.material('#e5bf82', 0.62);
+		const redRubber = this.material('#d92f35', 0.54);
+		const blackRubber = this.material('#171b1c', 0.5);
+		const bladeCore = new THREE.Mesh(new THREE.CylinderGeometry(0.113, 0.113, 0.014, 40), wood);
+		bladeCore.rotation.x = Math.PI / 2;
+		bladeCore.scale.z = 1.08;
+		const redFace = new THREE.Mesh(new THREE.CylinderGeometry(0.106, 0.106, 0.004, 40), redRubber);
+		redFace.rotation.x = Math.PI / 2;
+		redFace.scale.z = 1.08;
+		redFace.position.z = -0.009;
+		const blackFace = new THREE.Mesh(new THREE.CylinderGeometry(0.106, 0.106, 0.004, 40), blackRubber);
+		blackFace.rotation.x = Math.PI / 2;
+		blackFace.scale.z = 1.08;
+		blackFace.position.z = 0.009;
+		const bladeRim = new THREE.Mesh(new THREE.TorusGeometry(0.113, 0.006, 8, 40), lightWood);
+		bladeRim.scale.y = 1.08;
+		const handleCore = new THREE.Mesh(new THREE.CapsuleGeometry(0.027, 0.13, 7, 14), wood);
+		handleCore.position.y = -0.17;
+		const handleFront = new THREE.Mesh(new THREE.BoxGeometry(0.036, 0.145, 0.014), lightWood);
+		handleFront.position.set(0, -0.17, -0.025);
+		const handleStripe = new THREE.Mesh(new THREE.BoxGeometry(0.012, 0.15, 0.006), shirtDark);
+		handleStripe.position.set(0, -0.17, -0.034);
+		const rubberMark = new THREE.Mesh(new THREE.CircleGeometry(0.011, 16), lightWood);
+		rubberMark.position.set(0, 0.025, -0.012);
+		this.racket.add(bladeCore, redFace, blackFace, bladeRim, handleCore, handleFront, handleStripe, rubberMark);
+		this.racket.position.set(0.355, -0.18, -0.245);
+		this.racket.rotation.set(-0.08, 0, -0.08);
+		this.racketPose.copy(this.racket.rotation);
+		this.hittingArm.add(this.racket);
+		this.opponent.add(this.hittingArm);
+
+		this.opponent.traverse((object) => {
+			if (object instanceof THREE.Mesh) {
+				object.castShadow = true;
+				object.receiveShadow = true;
+			}
+		});
 		this.opponent.position.z = 1.72;
 		this.scene.add(this.opponent);
 	}
 
 	prepare(s: ShotSpec) {
-		this.racket.rotation.set(s.feed === 'backspin' ? 0.58 : s.feed === 'block' ? -0.08 : -0.25, -s.targetX * 0.35, -0.12);
-		this.racket.position.x = 0.48 + s.targetX * 0.1;
+		this.armPose.set(
+			s.feed === 'backspin' ? 0.16 : s.feed === 'block' ? -0.035 : -0.08,
+			-s.targetX * 0.16,
+			s.feed === 'backspin' ? 0.1 : -0.035
+		);
+		this.racketPose.set(
+			s.feed === 'backspin' ? 0.38 : s.feed === 'block' ? -0.08 : -0.2,
+			-s.targetX * 0.22,
+			-0.08
+		);
+		this.hittingArm.rotation.copy(this.armPose);
+		this.racket.rotation.copy(this.racketPose);
 	}
 
 	feed(s: ShotSpec, showMarker: boolean) {
@@ -176,7 +317,17 @@ export class PracticeScene {
 		const dt = Math.min(0.02, (now - this.last) / 1000);
 		this.last = now;
 		this.swing = Math.max(0, this.swing - dt * 5.5);
-		this.racket.position.z = -0.22 - Math.sin(this.swing * Math.PI) * 0.1;
+		const stroke = Math.sin(this.swing * Math.PI);
+		this.hittingArm.rotation.set(
+			this.armPose.x - stroke * 0.2,
+			this.armPose.y + stroke * 0.045,
+			this.armPose.z - stroke * 0.16
+		);
+		this.racket.rotation.set(
+			this.racketPose.x + stroke * 0.07,
+			this.racketPose.y,
+			this.racketPose.z - stroke * 0.04
+		);
 
 		for (let i = this.active.length - 1; i >= 0; i--) {
 			const b = this.active[i];
