@@ -12,8 +12,9 @@ export function makeShot(drill: Drill, index: number, hand: Hand, variance: numb
 	const rand=seeded(seed + index*7919); let step: Step=drill.pattern[index%drill.pattern.length];
 	if (drill.random) { const pool=drill.pattern; step=pool[Math.floor(rand()*pool.length)]; }
 	if (step.decision) step={...step,response:step.decision[Math.floor(rand()*step.decision.length)]};
-	// Patterns use conventional right-handed geometry, then mirror as one unit for a left-handed player.
-	const mirror=hand==='left' ? -1 : 1;
+	// The camera looks back toward +Z, so its on-screen horizontal axis is the inverse of world X.
+	// Keep a left-hander's BH on their right and FH on their left; mirror that layout for right-handers.
+	const mirror=hand==='left' ? 1 : -1;
 	const spread=variance*.055;
 	const targetX=Math.max(-.72,Math.min(.72,xByZone[step.zone]*mirror+(rand()-.5)*spread));
 	const targetZ=isShort(step.zone) ? -.18+(rand()-.5)*variance*.08 : -1.02+(rand()-.5)*variance*.13;
